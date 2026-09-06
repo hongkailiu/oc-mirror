@@ -472,7 +472,7 @@ func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFi
 			log.Debug("No max version found for package %q and thus no elimination of versions", pkg.Name)
 			continue
 		}
-		var channels []declcfg.Channel
+		channels := make([]declcfg.Channel, 0, len(dc.Channels))
 		for _, chanel := range dc.Channels {
 			chanel.Entries = eliminatingIntermediaryVersionsWithMaxVersion(chanel, maxVersion, log)
 			channels = append(channels, chanel)
