@@ -474,7 +474,9 @@ func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFi
 		}
 		channels := make([]declcfg.Channel, 0, len(dc.Channels))
 		for _, chanel := range dc.Channels {
-			chanel.Entries = eliminatingIntermediaryVersionsWithMaxVersion(chanel, maxVersion, log)
+			if chanel.Package == pkg.Name {
+				chanel.Entries = eliminatingIntermediaryVersionsWithMaxVersion(chanel, maxVersion, log)
+			}
 			channels = append(channels, chanel)
 		}
 		dc.Channels = channels
@@ -482,7 +484,7 @@ func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFi
 	return dc
 }
 
-// eliminatingIntermediaryVersions eliminates intermediary versions between maxVersion to the head if
+// eliminatingIntermediaryVersionsWithMaxVersion eliminates intermediary versions between maxVersion to the head if
 // the replaces chain holds from maxVersion to the head of the channel
 // and each between them skips all older versions
 func eliminatingIntermediaryVersionsWithMaxVersion(channel declcfg.Channel, maxVersion string, log clog.PluggableLoggerInterface) []declcfg.ChannelEntry {
