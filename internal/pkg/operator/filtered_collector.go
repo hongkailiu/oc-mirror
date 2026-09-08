@@ -491,70 +491,65 @@ func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFi
 // then jump over (see skipLookGood).
 func eliminatingIntermediaryVersionsWithMaxVersion(channel declcfg.Channel, maxVersion string, log clog.PluggableLoggerInterface) []declcfg.ChannelEntry {
 	maxV, err := semver.Parse(maxVersion)
-	if err != nil {
+	if err != nil || len(channel.Entries) == 0 {
 		return channel.Entries
-	}
-	if len(channel.Entries) == 0 {
-		return channel.Entries
-	}
-	byName := make(map[string]declcfg.ChannelEntry, len(channel.Entries))
-	for _, e := range channel.Entries {
-		byName[e.Name] = e
 	}
 	head := channel.Entries[0]
-	// Follow the replaces chain from the head. Every entry whose version is greater than maxVersion is an
-	// intermediary to eliminate; the first entry that is not greater becomes the head's new replaces target.
-	var eliminated []declcfg.ChannelEntry
-	var target declcfg.ChannelEntry
-	foundTarget := false
-	visited := map[string]struct{}{head.Name: {}}
-	current := head
-	for {
-		next, ok := byName[current.Replaces]
-		if !ok {
-			// The chain ends (dangling or empty replaces) before reaching maxVersion: no safe target.
-			break
-		}
-		if _, seen := visited[next.Name]; seen {
-			// Guard against a cyclic replaces chain in untrusted catalog data.
-			break
-		}
-		visited[next.Name] = struct{}{}
-		if !greater(next.Name, maxV) {
-			target = next
-			foundTarget = true
-			break
-		}
-		eliminated = append(eliminated, next)
-		current = next
-	}
-	if !foundTarget || len(eliminated) == 0 {
+	eliminated, target, ok := intermediariesAboveMaxVersion(channel.Entries, maxV)
+	if !ok {
 		return channel.Entries
 	}
 	// The head must skip every version it would jump over once the intermediaries are removed:
 	// the eliminated entries plus the new replaces target.
-	jumped := make([]declcfg.ChannelEntry, 0, len(eliminated)+1)
-	jumped = append(jumped, eliminated...)
-	jumped = append(jumped, target)
-	if !skipLookGood(head, jumped) {
+	if !skipLookGood(head, append(eliminated, target)) {
 		return channel.Entries
 	}
-	eliminatedNames := make(map[string]struct{}, len(eliminated))
+	head.Replaces = target.Name
+	return rebuildWithoutEliminated(channel, head, eliminated, log)
+}
+
+// intermediariesAboveMaxVersion follows the replaces chain from the head (entries[0]) and returns every entry
+// whose version is greater than maxV, along with the first entry that is not greater (the head's new replaces
+// target). ok is false when nothing can be eliminated: the chain ends before reaching such a target, it cycles,
+// or no entry exceeds maxV.
+func intermediariesAboveMaxVersion(entries []declcfg.ChannelEntry, maxV semver.Version) (eliminated []declcfg.ChannelEntry, target declcfg.ChannelEntry, ok bool) {
+	byName := make(map[string]declcfg.ChannelEntry, len(entries))
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	visited := map[string]struct{}{}
+	for current := entries[0]; ; {
+		if _, seen := visited[current.Name]; seen {
+			return nil, declcfg.ChannelEntry{}, false // cyclic replaces chain in untrusted catalog data
+		}
+		visited[current.Name] = struct{}{}
+		next, found := byName[current.Replaces]
+		if !found {
+			return nil, declcfg.ChannelEntry{}, false // chain ends before reaching maxVersion
+		}
+		if !greater(next.Name, maxV) {
+			return eliminated, next, len(eliminated) > 0
+		}
+		eliminated = append(eliminated, next)
+		current = next
+	}
+}
+
+// rebuildWithoutEliminated returns the channel entries with the eliminated intermediaries removed and the head
+// replaced by its updated form, preserving the original ordering of the remaining entries.
+func rebuildWithoutEliminated(channel declcfg.Channel, head declcfg.ChannelEntry, eliminated []declcfg.ChannelEntry, log clog.PluggableLoggerInterface) []declcfg.ChannelEntry {
+	gone := make(map[string]struct{}, len(eliminated))
 	for _, e := range eliminated {
-		eliminatedNames[e.Name] = struct{}{}
+		gone[e.Name] = struct{}{}
 		log.Info("eliminating intermediary version %q for channel %q of package %q", e.Name, channel.Name, channel.Package)
 	}
-	head.Replaces = target.Name
 	result := make([]declcfg.ChannelEntry, 0, len(channel.Entries)-len(eliminated))
 	for _, e := range channel.Entries {
 		if e.Name == head.Name {
 			result = append(result, head)
-			continue
+		} else if _, removed := gone[e.Name]; !removed {
+			result = append(result, e)
 		}
-		if _, gone := eliminatedNames[e.Name]; gone {
-			continue
-		}
-		result = append(result, e)
 	}
 	return result
 }
