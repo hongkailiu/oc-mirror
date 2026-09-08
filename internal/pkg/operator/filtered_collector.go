@@ -485,17 +485,20 @@ func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFi
 }
 
 // eliminatingIntermediaryVersionsWithMaxVersion eliminates intermediary versions between maxVersion and the head.
-// Starting from the head (entries[0]), it follows the replaces chain, collecting every entry whose version is
-// greater than maxVersion. The walk stops at the first entry that is not greater than maxVersion; that entry
-// becomes the head's new replaces target. Elimination only proceeds when the head skips every version it would
-// then jump over (see skipLookGood).
+// Starting from the channel head, it follows the replaces chain, collecting every entry whose version is greater
+// than maxVersion. The walk stops at the first entry that is not greater than maxVersion; that entry becomes the
+// head's new replaces target. Elimination only proceeds when the head skips every version it would then jump over
+// (see skipLookGood).
 func eliminatingIntermediaryVersionsWithMaxVersion(channel declcfg.Channel, maxVersion string, log clog.PluggableLoggerInterface) []declcfg.ChannelEntry {
 	maxV, err := semver.Parse(maxVersion)
 	if err != nil || len(channel.Entries) == 0 {
 		return channel.Entries
 	}
-	head := channel.Entries[0]
-	eliminated, target, ok := intermediariesAboveMaxVersion(channel.Entries, maxV)
+	head, ok := findHead(channel.Entries)
+	if !ok {
+		return channel.Entries
+	}
+	eliminated, target, ok := intermediariesAboveMaxVersion(channel.Entries, head, maxV)
 	if !ok {
 		return channel.Entries
 	}
@@ -508,17 +511,33 @@ func eliminatingIntermediaryVersionsWithMaxVersion(channel declcfg.Channel, maxV
 	return rebuildWithoutEliminated(channel, head, eliminated, log)
 }
 
-// intermediariesAboveMaxVersion follows the replaces chain from the head (entries[0]) and returns every entry
-// whose version is greater than maxV, along with the first entry that is not greater (the head's new replaces
-// target). ok is false when nothing can be eliminated: the chain ends before reaching such a target, it cycles,
-// or no entry exceeds maxV.
-func intermediariesAboveMaxVersion(entries []declcfg.ChannelEntry, maxV semver.Version) (eliminated []declcfg.ChannelEntry, target declcfg.ChannelEntry, ok bool) {
+// findHead returns the channel head: the first entry that no other entry replaces. ok is false when every entry
+// is replaced by another (e.g. a fully cyclic chain).
+func findHead(entries []declcfg.ChannelEntry) (declcfg.ChannelEntry, bool) {
+	replaced := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		if e.Replaces != "" {
+			replaced[e.Replaces] = struct{}{}
+		}
+	}
+	for _, e := range entries {
+		if _, isReplaced := replaced[e.Name]; !isReplaced {
+			return e, true
+		}
+	}
+	return declcfg.ChannelEntry{}, false
+}
+
+// intermediariesAboveMaxVersion follows the replaces chain from the head and returns every entry whose version is
+// greater than maxV, along with the first entry that is not greater (the head's new replaces target). ok is false
+// when nothing can be eliminated: the chain ends before reaching such a target, it cycles, or no entry exceeds maxV.
+func intermediariesAboveMaxVersion(entries []declcfg.ChannelEntry, head declcfg.ChannelEntry, maxV semver.Version) (eliminated []declcfg.ChannelEntry, target declcfg.ChannelEntry, ok bool) {
 	byName := make(map[string]declcfg.ChannelEntry, len(entries))
 	for _, e := range entries {
 		byName[e.Name] = e
 	}
 	visited := map[string]struct{}{}
-	for current := entries[0]; ; {
+	for current := head; ; {
 		if _, seen := visited[current.Name]; seen {
 			return nil, declcfg.ChannelEntry{}, false // cyclic replaces chain in untrusted catalog data
 		}
