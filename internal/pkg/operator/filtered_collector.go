@@ -484,50 +484,89 @@ func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFi
 	return dc
 }
 
-// eliminatingIntermediaryVersionsWithMaxVersion eliminates intermediary versions between maxVersion to the head if
-// the replaces chain holds from maxVersion to the head of the channel
-// and each between them skips all older versions
+// eliminatingIntermediaryVersionsWithMaxVersion eliminates intermediary versions between maxVersion and the head.
+// Starting from the head (entries[0]), it follows the replaces chain, collecting every entry whose version is
+// greater than maxVersion. The walk stops at the first entry that is not greater than maxVersion; that entry
+// becomes the head's new replaces target. Elimination only proceeds when the head skips every version it would
+// then jump over (see skipLookGood).
 func eliminatingIntermediaryVersionsWithMaxVersion(channel declcfg.Channel, maxVersion string, log clog.PluggableLoggerInterface) []declcfg.ChannelEntry {
 	maxV, err := semver.Parse(maxVersion)
 	if err != nil {
 		return channel.Entries
 	}
-	eliminationIndex := -1
-	for i, entry := range channel.Entries {
-		if i+1 >= len(channel.Entries) {
-			break
-		}
-		// https://redhat-internal.slack.com/archives/CHMALGJV6/p1788314377012859?thread_ts=1788277075.814849&cid=CHMALGJV6
-		// The catalog-filter library will ensure that a contiguous replaces chain extends from minVersion...channel-head.
-		// Checking it again here (the 2nd condition below) might be redundant but should not be a big deal anyway.
-		if greater(entry.Name, maxV) && entry.Replaces == channel.Entries[i+1].Name {
-			eliminationIndex = i
-			continue
-		}
-		break
-	}
-	if eliminationIndex == -1 || !skipLookGood(channel.Entries, eliminationIndex) {
+	if len(channel.Entries) == 0 {
 		return channel.Entries
 	}
-	for i := 0; i <= eliminationIndex; i++ {
-		log.Info("eliminating intermediary version %q for channel %q of package %q", channel.Entries[i].Name, channel.Name, channel.Package)
+	byName := make(map[string]declcfg.ChannelEntry, len(channel.Entries))
+	for _, e := range channel.Entries {
+		byName[e.Name] = e
 	}
-	entryHead := channel.Entries[0]
-	entryHead.Replaces = channel.Entries[eliminationIndex+1].Name
-	return append([]declcfg.ChannelEntry{entryHead}, channel.Entries[eliminationIndex+1:]...)
+	head := channel.Entries[0]
+	// Follow the replaces chain from the head. Every entry whose version is greater than maxVersion is an
+	// intermediary to eliminate; the first entry that is not greater becomes the head's new replaces target.
+	var eliminated []declcfg.ChannelEntry
+	var target declcfg.ChannelEntry
+	foundTarget := false
+	visited := map[string]struct{}{head.Name: {}}
+	current := head
+	for {
+		next, ok := byName[current.Replaces]
+		if !ok {
+			// The chain ends (dangling or empty replaces) before reaching maxVersion: no safe target.
+			break
+		}
+		if _, seen := visited[next.Name]; seen {
+			// Guard against a cyclic replaces chain in untrusted catalog data.
+			break
+		}
+		visited[next.Name] = struct{}{}
+		if !greater(next.Name, maxV) {
+			target = next
+			foundTarget = true
+			break
+		}
+		eliminated = append(eliminated, next)
+		current = next
+	}
+	if !foundTarget || len(eliminated) == 0 {
+		return channel.Entries
+	}
+	// The head must skip every version it would jump over once the intermediaries are removed:
+	// the eliminated entries plus the new replaces target.
+	jumped := make([]declcfg.ChannelEntry, 0, len(eliminated)+1)
+	jumped = append(jumped, eliminated...)
+	jumped = append(jumped, target)
+	if !skipLookGood(head, jumped) {
+		return channel.Entries
+	}
+	eliminatedNames := make(map[string]struct{}, len(eliminated))
+	for _, e := range eliminated {
+		eliminatedNames[e.Name] = struct{}{}
+		log.Info("eliminating intermediary version %q for channel %q of package %q", e.Name, channel.Name, channel.Package)
+	}
+	head.Replaces = target.Name
+	result := make([]declcfg.ChannelEntry, 0, len(channel.Entries)-len(eliminated))
+	for _, e := range channel.Entries {
+		if e.Name == head.Name {
+			result = append(result, head)
+			continue
+		}
+		if _, gone := eliminatedNames[e.Name]; gone {
+			continue
+		}
+		result = append(result, e)
+	}
+	return result
 }
 
-// skipLookGood reports whether the intermediary versions in
-// entries[1 .. eliminationIndex] can be safely eliminated. After elimination
-// only the head (entries[0]) survives above entries[eliminationIndex+1], so it
-// is safe only when the head skips every version it would then jump over: each
-// entry from index 1 through eliminationIndex+1. A version is skipped when its
-// name is listed in the head's Skips or when it falls within the head's SkipRange.
-func skipLookGood(entries []declcfg.ChannelEntry, eliminationIndex int) bool {
-	if eliminationIndex < 0 || eliminationIndex+1 >= len(entries) {
+// skipLookGood reports whether the head can safely absorb the jump over the given entries. After elimination
+// the head replaces its new target directly, so it is safe only when the head skips every version it jumps
+// over: each entry in jumped. A version is skipped when its name is listed in the head's Skips or when it
+// falls within the head's SkipRange.
+func skipLookGood(head declcfg.ChannelEntry, jumped []declcfg.ChannelEntry) bool {
+	if len(jumped) == 0 {
 		return false
 	}
-	head := entries[0]
 	skips := make(map[string]struct{}, len(head.Skips))
 	for _, s := range head.Skips {
 		skips[s] = struct{}{}
@@ -537,7 +576,7 @@ func skipLookGood(entries []declcfg.ChannelEntry, eliminationIndex int) bool {
 	if head.SkipRange != "" {
 		skipRange, _ = semver.ParseRange(head.SkipRange)
 	}
-	for _, entry := range entries[1 : eliminationIndex+2] {
+	for _, entry := range jumped {
 		if _, listed := skips[entry.Name]; listed {
 			continue
 		}
