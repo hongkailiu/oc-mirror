@@ -255,6 +255,34 @@ func TestEliminatingIntermediaryVersions(t *testing.T) {
 					{Name: "foo.v1.3.0", Replaces: "foo.v1.0.0", Skips: []string{"foo.v1.2.0", "foo.v1.1.0", "foo.v1.0.0"}},
 				}}}},
 		},
+		{
+			// maxVersion equals the head's version, so there is nothing above it to
+			// eliminate: the walk stops at the first entry below the head and the
+			// channel is returned unchanged.
+			name: "maxVersion equals head version leaves the channel unchanged",
+			dc: &declcfg.DeclarativeConfig{
+				Packages: []declcfg.Package{{Name: "foo"}},
+				Channels: []declcfg.Channel{{Name: "stable", Package: "foo", Entries: []declcfg.ChannelEntry{
+					{Name: "foo.v1.3.0", Replaces: "foo.v1.2.0", Skips: []string{"foo.v1.2.0", "foo.v1.1.0", "foo.v1.0.0"}},
+					{Name: "foo.v1.2.0", Replaces: "foo.v1.1.0"},
+					{Name: "foo.v1.1.0", Replaces: "foo.v1.0.0"},
+					{Name: "foo.v1.0.0"},
+				}}},
+			},
+			filter: v2alpha1.Operator{
+				IncludeConfig: v2alpha1.IncludeConfig{
+					Packages: []v2alpha1.IncludePackage{{Name: "foo", Channels: []v2alpha1.IncludeChannel{{Name: "stable", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.3.0"}}}}},
+				},
+			},
+			want: &declcfg.DeclarativeConfig{
+				Packages: []declcfg.Package{{Name: "foo"}},
+				Channels: []declcfg.Channel{{Name: "stable", Package: "foo", Entries: []declcfg.ChannelEntry{
+					{Name: "foo.v1.3.0", Replaces: "foo.v1.2.0", Skips: []string{"foo.v1.2.0", "foo.v1.1.0", "foo.v1.0.0"}},
+					{Name: "foo.v1.2.0", Replaces: "foo.v1.1.0"},
+					{Name: "foo.v1.1.0", Replaces: "foo.v1.0.0"},
+					{Name: "foo.v1.0.0"},
+				}}}},
+		},
 	}
 
 	for _, tt := range tests {
