@@ -11,19 +11,11 @@ import (
 )
 
 func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFilter v2alpha1.Operator, log clog.PluggableLoggerInterface) *declcfg.DeclarativeConfig {
-	maxVersions := map[string]string{}
-	for _, pkg := range iscCatalogFilter.Packages {
-		maxVersions[pkg.Name] = pkg.MaxVersion
-	}
 	for _, pkg := range dc.Packages {
-		maxVersion, ok := maxVersions[pkg.Name]
-		if !ok {
-			log.Debug("No max version found for package %q and thus no elimination of versions", pkg.Name)
-			continue
-		}
 		channels := make([]declcfg.Channel, 0, len(dc.Channels))
 		for _, chanel := range dc.Channels {
 			if chanel.Package == pkg.Name {
+				maxVersion := foundMaxVersion(chanel.Name, pkg.Name, iscCatalogFilter.Packages)
 				chanel.Entries = eliminatingIntermediaryVersionsWithMaxVersion(chanel, maxVersion, log)
 			}
 			channels = append(channels, chanel)
@@ -33,6 +25,19 @@ func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFi
 	return dc
 }
 
+func foundMaxVersion(chanelName, pkgName string, packages []v2alpha1.IncludePackage) string {
+	for _, pkg := range packages {
+		if pkg.Name == pkgName {
+			for _, chanel := range pkg.Channels {
+				if chanel.Name == chanelName {
+					return chanel.MaxVersion
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // eliminatingIntermediaryVersionsWithMaxVersion eliminates intermediary versions between maxVersion and the head.
 // Starting from the channel head, it follows the replaces chain, collecting every entry whose version is greater
 // than maxVersion. The walk stops at the first entry that is not greater than maxVersion; that entry becomes the
@@ -40,7 +45,11 @@ func eliminatingIntermediaryVersions(dc *declcfg.DeclarativeConfig, iscCatalogFi
 // (see skipLookGood).
 func eliminatingIntermediaryVersionsWithMaxVersion(channel declcfg.Channel, maxVersion string, log clog.PluggableLoggerInterface) []declcfg.ChannelEntry {
 	maxV, err := semver.Parse(maxVersion)
-	if err != nil || len(channel.Entries) == 0 {
+	if err != nil {
+		log.Error("error parsing max version %s: %v", maxVersion, err)
+		return channel.Entries
+	}
+	if len(channel.Entries) == 0 {
 		return channel.Entries
 	}
 	head, ok := findHead(channel.Entries)
@@ -151,18 +160,22 @@ func skipLookGood(head declcfg.ChannelEntry, jumped []declcfg.ChannelEntry) bool
 	return true
 }
 
-// versionFromEntryName extracts the semver from a channel entry name of the
-// form "<package>.v<semver>" (e.g. "foo.v1.3.0").
+// versionFromEntryName extracts the semver from a channel entry name. Names look
+// like "<package>.<semver>" or "<package>.v<semver>" (e.g. "rhods-operator.3.4.3"
+// or "foo.v1.3.0"). Because the package name carries no version-like suffix, the
+// version is the trailing part after the leftmost dot (with an optional leading
+// "v") that parses as a full semver.
 func versionFromEntryName(entryName string) (semver.Version, bool) {
-	idx := strings.LastIndex(entryName, ".v")
-	if idx == -1 {
-		return semver.Version{}, false
+	for i := 0; i < len(entryName); i++ {
+		if entryName[i] != '.' {
+			continue
+		}
+		candidate := strings.TrimPrefix(entryName[i+1:], "v")
+		if v, err := semver.Parse(candidate); err == nil {
+			return v, true
+		}
 	}
-	v, err := semver.Parse(entryName[idx+2:])
-	if err != nil {
-		return semver.Version{}, false
-	}
-	return v, true
+	return semver.Version{}, false
 }
 
 func greater(entryName string, version semver.Version) bool {

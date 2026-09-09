@@ -10,6 +10,34 @@ import (
 	clog "github.com/openshift/oc-mirror/v2/internal/pkg/log"
 )
 
+// TestVersionFromEntryName covers both bundle-name forms: the "<package>.v<semver>"
+// form (e.g. amq-broker) and the "<package>.<semver>" form with no "v" prefix
+// (e.g. rhods-operator). The latter used to fail to parse.
+func TestVersionFromEntryName(t *testing.T) {
+	tests := []struct {
+		entryName string
+		want      string // empty means "not parseable"
+	}{
+		{"rhods-operator.3.4.3", "3.4.3"},
+		{"rhods-operator.3.5.0-ea.2", "3.5.0-ea.2"},
+		{"rhods-operator.1.20.1-8", "1.20.1-8"},
+		{"foo.v1.3.0", "1.3.0"},
+		{"amq-broker.v7.12.0-opr-1-0.1780501200.p", "7.12.0-opr-1-0.1780501200.p"},
+		{"no-version-here", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.entryName, func(t *testing.T) {
+			v, ok := versionFromEntryName(tt.entryName)
+			if tt.want == "" {
+				assert.False(t, ok)
+				return
+			}
+			assert.True(t, ok)
+			assert.Equal(t, tt.want, v.String())
+		})
+	}
+}
+
 func TestEliminatingIntermediaryVersions(t *testing.T) {
 	log := clog.New("trace")
 
@@ -55,7 +83,7 @@ func TestEliminatingIntermediaryVersions(t *testing.T) {
 			},
 			filter: v2alpha1.Operator{
 				IncludeConfig: v2alpha1.IncludeConfig{
-					Packages: []v2alpha1.IncludePackage{{Name: "foo", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}},
+					Packages: []v2alpha1.IncludePackage{{Name: "foo", Channels: []v2alpha1.IncludeChannel{{Name: "stable", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}}}},
 				},
 			},
 			want: &declcfg.DeclarativeConfig{
@@ -102,7 +130,7 @@ func TestEliminatingIntermediaryVersions(t *testing.T) {
 			},
 			filter: v2alpha1.Operator{
 				IncludeConfig: v2alpha1.IncludeConfig{
-					Packages: []v2alpha1.IncludePackage{{Name: "foo", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}},
+					Packages: []v2alpha1.IncludePackage{{Name: "foo", Channels: []v2alpha1.IncludeChannel{{Name: "stable", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}}}},
 				},
 			},
 			want: &declcfg.DeclarativeConfig{
@@ -152,7 +180,7 @@ func TestEliminatingIntermediaryVersions(t *testing.T) {
 			},
 			filter: v2alpha1.Operator{
 				IncludeConfig: v2alpha1.IncludeConfig{
-					Packages: []v2alpha1.IncludePackage{{Name: "foo", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}},
+					Packages: []v2alpha1.IncludePackage{{Name: "foo", Channels: []v2alpha1.IncludeChannel{{Name: "stable", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}}}},
 				},
 			},
 			want: &declcfg.DeclarativeConfig{
@@ -190,7 +218,7 @@ func TestEliminatingIntermediaryVersions(t *testing.T) {
 			},
 			filter: v2alpha1.Operator{
 				IncludeConfig: v2alpha1.IncludeConfig{
-					Packages: []v2alpha1.IncludePackage{{Name: "foo", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}},
+					Packages: []v2alpha1.IncludePackage{{Name: "foo", Channels: []v2alpha1.IncludeChannel{{Name: "stable", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}}}},
 				},
 			},
 			want: &declcfg.DeclarativeConfig{
@@ -217,7 +245,7 @@ func TestEliminatingIntermediaryVersions(t *testing.T) {
 			},
 			filter: v2alpha1.Operator{
 				IncludeConfig: v2alpha1.IncludeConfig{
-					Packages: []v2alpha1.IncludePackage{{Name: "foo", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}},
+					Packages: []v2alpha1.IncludePackage{{Name: "foo", Channels: []v2alpha1.IncludeChannel{{Name: "stable", IncludeBundle: v2alpha1.IncludeBundle{MaxVersion: "1.0.0"}}}}},
 				},
 			},
 			want: &declcfg.DeclarativeConfig{
