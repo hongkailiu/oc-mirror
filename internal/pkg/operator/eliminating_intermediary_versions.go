@@ -166,7 +166,7 @@ func skipLookGood(head declcfg.ChannelEntry, jumped []declcfg.ChannelEntry) bool
 // version is the trailing part after the leftmost dot (with an optional leading
 // "v") that parses as a full semver.
 func versionFromEntryName(entryName string) (semver.Version, bool) {
-	for i := 0; i < len(entryName); i++ {
+	for i := range len(entryName) {
 		if entryName[i] != '.' {
 			continue
 		}
